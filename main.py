@@ -23,17 +23,17 @@ SCREEN_ORDER = ["beranda", "paket", "pesan"]
 if platform not in ("android", "ios"):
     Window.size = (390, 800)
 
-BG_DARK = (0x0B / 255, 0x12 / 255, 0x20 / 255, 1)          # --bg / #0B1220
-SURFACE = (0x11 / 255, 0x1A / 255, 0x2C / 255, 1)          # kartu
-BORDER = (0x22 / 255, 0x30 / 255, 0x4F / 255, 1)           # --border
-GOLD = (0xFD / 255, 0xB8 / 255, 0x13 / 255, 1)             # --accent-gold
-ORANGE = (0xFF / 255, 0x6B / 255, 0x4A / 255, 1)           # --accent-orange
-TEXT_MAIN = (0xF3 / 255, 0xF5 / 255, 0xF9 / 255, 1)
-TEXT_MUTED = (0x9A / 255, 0xA6 / 255, 0xC0 / 255, 1)
-DANGER = (0xFF / 255, 0x6B / 255, 0x6B / 255, 1)
+BG_DARK = (0xFC / 255, 0xE8 / 255, 0xD2 / 255, 1)          # --bg / #FCE8D2 (krem/peach)
+SURFACE = (0xFF / 255, 0xFF / 255, 0xFF / 255, 1)          # kartu (putih)
+BORDER = (0xF3 / 255, 0xDF / 255, 0xC0 / 255, 1)           # --border (krem lebih gelap)
+GOLD = (0xF7 / 255, 0x7A / 255, 0x1E / 255, 1)             # --accent-orange (dipakai sbg aksen utama)
+ORANGE = (0xF7 / 255, 0x7A / 255, 0x1E / 255, 1)           # --accent-orange
+TEXT_MAIN = (0x22 / 255, 0x1B / 255, 0x14 / 255, 1)        # teks utama (hampir hitam)
+TEXT_MUTED = (0x9C / 255, 0x92 / 255, 0x85 / 255, 1)       # teks abu-abu kecoklatan
+DANGER = (0xE5 / 255, 0x3E / 255, 0x3E / 255, 1)
 
-GOLD_HEX = "FDB813"
-MUTED_HEX = "9AA6C0"
+GOLD_HEX = "F77A1E"
+MUTED_HEX = "9C9285"
 
 Window.clearcolor = BG_DARK
 
@@ -317,7 +317,7 @@ class SuryaNetApp(App):
         return hero
 
     def _primary_button(self, text):
-        btn = Button(text=text, bold=True, color=(0.05, 0.05, 0.05, 1),
+        btn = Button(text=text, bold=True, color=(1, 1, 1, 1),
                     background_normal="", background_color=(0, 0, 0, 0))
         with btn.canvas.before:
             Color(*GOLD)
@@ -356,7 +356,7 @@ class SuryaNetApp(App):
             self.plan_cards[key] = card
 
             if featured:
-                card.add_widget(Label(text=data["badge"], color=(0.05, 0.05, 0.05, 1),
+                card.add_widget(Label(text=data["badge"], color=(1, 1, 1, 1),
                                       bold=True, font_size=dp(11), size_hint_y=None, height=dp(20)))
 
             card.add_widget(Label(text=data["nama"], color=GOLD, bold=True, font_size=dp(13),
@@ -460,14 +460,14 @@ class SuryaNetApp(App):
         spinner_values = [self._spinner_label(k) for k in PAKET_DATA]
         self.paket_spinner = Spinner(text=self._spinner_label("cahaya"), values=spinner_values,
                                      size_hint_y=None, height=dp(42),
-                                     background_color=SURFACE, color=TEXT_MAIN)
+                                     background_color=BORDER, color=TEXT_MAIN)
         self.paket_spinner.bind(text=self._on_spinner_change)
         form_card.add_widget(self.paket_spinner)
 
         
         total_box = BoxLayout(size_hint_y=None, height=dp(60), padding=dp(12), spacing=dp(10))
         with total_box.canvas.before:
-            Color(*BG_DARK)
+            Color(BORDER)
             trect = RoundedRectangle(pos=total_box.pos, size=total_box.size, radius=[dp(10)])
         total_box.bind(pos=lambda *_: setattr(trect, "pos", total_box.pos))
         total_box.bind(size=lambda *_: setattr(trect, "size", total_box.size))
