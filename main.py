@@ -1,13 +1,13 @@
+import calendar as calendar_module
 import json
 import os
-from sys import platform
 import uuid
-from datetime import datetime
+from datetime import datetime, date, timedelta
 
 from kivy.app import App
+from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.metrics import dp
-from kivy.properties import BooleanProperty, ListProperty, StringProperty
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.checkbox import CheckBox
@@ -18,7 +18,12 @@ from kivy.uix.textinput import TextInput
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.togglebutton import ToggleButton
 from kivy.graphics import Color, RoundedRectangle
-from kivy.lang import Builder
+from kivy.utils import platform
+
+try:
+    from plyer import notification as plyer_notification
+except ImportError:
+    plyer_notification = None
 
 DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tasks.json")
 
@@ -35,10 +40,174 @@ DANGER_COLOR = (1, 0.42, 0.42, 1)
 
 Window.clearcolor = BG_COLOR
 
+DEADLINE_FORMAT = "%d-%m-%Y"
+MONTH_NAMES_ID = [
+    "", "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+    "Juli", "Agustus", "September", "Oktober", "November", "Desember",
+]
+WEEKDAY_NAMES_ID = ["Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Min"]
+
+
+def parse_deadline(deadline_str):
+    """Ubah string 'dd-mm-yyyy' menjadi objek date. Kembalikan None kalau kosong/invalid."""
+    if not deadline_str:
+        return None
+    try:
+        return datetime.strptime(deadline_str, DEADLINE_FORMAT).date()
+    except ValueError:
+        return None
+
+
+def format_deadline_label(deadline_str, done):
+    """Kembalikan (teks, warna) untuk label deadline pada kartu tugas."""
+    d = parse_deadline(deadline_str)
+    if d is None:
+        return "", MUTED_COLOR
+    text = "Tenggat: " + d.strftime("%d %b %Y")
+    if done:
+        return text, MUTED_COLOR
+    today = date.today()
+    if d < today:
+        return text + " (Terlambat)", DANGER_COLOR
+    if d == today:
+        return text + " (Hari ini)", ACCENT_COLOR
+    if d == today + timedelta(days=1):
+        return text + " (Besok)", ACCENT_COLOR
+    return text, MUTED_COLOR
+
+
+
+class CalendarPopup(Popup):
+    def __init__(self, on_select, initial_date=None, **kwargs):
+        self.on_select = on_select
+        today = date.today()
+        start = initial_date or today
+        self.view_year = start.year
+        self.view_month = start.month
+        self.selected_date = initial_date
+
+        super().__init__(
+            title="Pilih Deadline",
+            size_hint=(0.92, 0.68),
+            separator_color=ACCENT_COLOR,
+            title_color=TEXT_COLOR,
+            **kwargs
+        )
+
+        root = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(12))
+        with root.canvas.before:
+            Color(*BG_COLOR)
+            self._bg_rect = RoundedRectangle(pos=root.pos, size=root.size)
+        root.bind(pos=lambda *_: setattr(self._bg_rect, "pos", root.pos))
+        root.bind(size=lambda *_: setattr(self._bg_rect, "size", root.size))
+        self.content = root
+
+
+        nav = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(40))
+        prev_btn = Button(text="<", size_hint=(None, 1), width=dp(44),
+                           background_normal="", background_color=CARD_COLOR,
+                           color=TEXT_COLOR, bold=True)
+        prev_btn.bind(on_release=lambda *_: self._change_month(-1))
+        self.month_label = Label(text="", color=TEXT_COLOR, font_size="16sp", bold=True)
+        next_btn = Button(text=">", size_hint=(None, 1), width=dp(44),
+                           background_normal="", background_color=CARD_COLOR,
+                           color=TEXT_COLOR, bold=True)
+        next_btn.bind(on_release=lambda *_: self._change_month(1))
+        nav.add_widget(prev_btn)
+        nav.add_widget(self.month_label)
+        nav.add_widget(next_btn)
+        root.add_widget(nav)
+
+
+        weekday_row = GridLayout(cols=7, size_hint_y=None, height=dp(24))
+        for wd in WEEKDAY_NAMES_ID:
+            weekday_row.add_widget(
+                Label(text=wd, color=MUTED_COLOR, font_size="11sp", bold=True)
+            )
+        root.add_widget(weekday_row)
+
+  
+        self.day_grid = GridLayout(cols=7, spacing=dp(4))
+        root.add_widget(self.day_grid)
+
+
+        cancel_btn = Button(
+            text="Batal", size_hint_y=None, height=dp(40),
+            background_normal="", background_color=CARD_COLOR,
+            color=MUTED_COLOR, bold=True,
+        )
+        cancel_btn.bind(on_release=lambda *_: self.dismiss())
+        root.add_widget(cancel_btn)
+
+        self._render_calendar()
+
+    def _change_month(self, delta):
+        m = self.view_month + delta
+        y = self.view_year
+        if m < 1:
+            m = 12
+            y -= 1
+        elif m > 12:
+            m = 1
+            y += 1
+        self.view_month = m
+        self.view_year = y
+        self._render_calendar()
+
+    def _render_calendar(self):
+        self.month_label.text = "{} {}".format(MONTH_NAMES_ID[self.view_month], self.view_year)
+        self.day_grid.clear_widgets()
+        cal = calendar_module.Calendar(firstweekday=0)
+        today = date.today()
+        for week in cal.monthdayscalendar(self.view_year, self.view_month):
+            for day in week:
+                if day == 0:
+                    self.day_grid.add_widget(Label(text=""))
+                    continue
+                d = date(self.view_year, self.view_month, day)
+                is_past = d < today
+                is_selected = self.selected_date == d
+                is_today = d == today and not is_selected
+
+                if is_selected:
+                    bg = ACCENT_COLOR
+                    fg = (1, 1, 1, 1)
+                elif is_past:
+                    bg = BG_COLOR
+                    fg = MUTED_COLOR
+                elif is_today:
+                    bg = CARD_COLOR
+                    fg = ACCENT_COLOR
+                else:
+                    bg = CARD_COLOR
+                    fg = TEXT_COLOR
+
+                btn = Button(
+                    text=str(day),
+                    background_normal="",
+                    background_color=bg,
+                    color=fg,
+                    disabled=is_past,
+                    font_size="13sp",
+                    bold=is_today or is_selected,
+                )
+                if not is_past:
+                    btn.bind(on_release=lambda b, dd=d: self._select_date(dd))
+                self.day_grid.add_widget(btn)
+
+    def _select_date(self, d):
+        self.selected_date = d
+        self.on_select(d)
+        self.dismiss()
+
 
 class TaskItem(BoxLayout):
     def __init__(self, task, on_toggle, on_delete, **kwargs):
-        super().__init__(orientation="horizontal", size_hint_y=None, height=dp(64),
+        deadline_text, deadline_color = format_deadline_label(
+            task.get("deadline"), task["done"]
+        )
+        card_height = dp(78) if deadline_text else dp(64)
+        super().__init__(orientation="horizontal", size_hint_y=None, height=card_height,
                           padding=(dp(12), dp(8)), spacing=dp(10), **kwargs)
         self.task = task
 
@@ -47,11 +216,13 @@ class TaskItem(BoxLayout):
             self.bg_rect = RoundedRectangle(radius=[dp(14)], pos=self.pos, size=self.size)
         self.bind(pos=self._update_rect, size=self._update_rect)
 
+    
         self.checkbox = CheckBox(active=task["done"], size_hint=(None, None),
                                   size=(dp(28), dp(28)))
         self.checkbox.bind(active=lambda cb, val: on_toggle(task["id"], val))
         self.add_widget(self.checkbox)
 
+     
         text_box = BoxLayout(orientation="vertical", spacing=dp(2))
         title_color = MUTED_COLOR if task["done"] else TEXT_COLOR
         self.title_label = Label(
@@ -79,9 +250,25 @@ class TaskItem(BoxLayout):
                                                   (date_label.width, None)))
         text_box.add_widget(self.title_label)
         text_box.add_widget(date_label)
+
+        if deadline_text:
+            deadline_label = Label(
+                text=deadline_text,
+                color=deadline_color,
+                font_size="11sp",
+                bold=(deadline_color == DANGER_COLOR),
+                halign="left",
+                valign="middle",
+                size_hint_y=None,
+                height=dp(16),
+            )
+            deadline_label.bind(size=lambda *_: setattr(deadline_label, "text_size",
+                                                          (deadline_label.width, None)))
+            text_box.add_widget(deadline_label)
+
         self.add_widget(text_box)
 
-
+    
         delete_btn = Button(
             text="X",
             size_hint=(None, None),
@@ -99,11 +286,13 @@ class TaskItem(BoxLayout):
         self.bg_rect.size = self.size
 
 
+
 class TodoRoot(BoxLayout):
     def __init__(self, **kwargs):
         super().__init__(orientation="vertical", padding=dp(16), spacing=dp(12), **kwargs)
         self.tasks = []
         self.current_filter = "all"
+        self.selected_deadline = None
 
         self._build_header()
         self._build_stats()
@@ -113,10 +302,14 @@ class TodoRoot(BoxLayout):
 
         self.load_tasks()
 
+ 
+        Clock.schedule_once(lambda dt: self.check_deadline_notifications(), 2)
+        Clock.schedule_interval(self.check_deadline_notifications, 3600)
+
 
     def _build_header(self):
         header = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(56))
-        title = Label(text="To Do List", font_size="24sp", bold=True,
+        title = Label(text="Tugas Saya", font_size="24sp", bold=True,
                        color=TEXT_COLOR, halign="left", valign="top",
                        size_hint_y=None, height=dp(32))
         title.bind(size=lambda *_: setattr(title, "text_size", (title.width, None)))
@@ -156,7 +349,7 @@ class TodoRoot(BoxLayout):
         box.add_widget(text_label)
         return {"widget": box, "num": num_label}
 
-
+   
     def _build_filters(self):
         row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(40),
                          spacing=dp(8))
@@ -191,8 +384,12 @@ class TodoRoot(BoxLayout):
 
 
     def _build_composer(self):
-        row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(52),
-                         spacing=dp(8))
+        composer = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(96),
+                              spacing=dp(6))
+
+
+        row1 = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(48),
+                          spacing=dp(8))
         self.input = TextInput(
             hint_text="Tulis tugas baru...",
             multiline=False,
@@ -202,36 +399,47 @@ class TodoRoot(BoxLayout):
             padding=(dp(14), dp(14)),
             cursor_color=ACCENT_COLOR,
         )
-
-        self.input.bind(on_text_validate=lambda *_: self.add_task())
         add_btn = Button(
-            text="+",
-            size_hint=(None, 1),
-            width=dp(52),
-            background_normal="",
-            background_color=(0, 0, 0, 0),
-            font_size="22sp",
-            bold=True
+            text="+", size_hint=(None, 1), width=dp(52),
+            background_normal="", background_color=ACCENT_COLOR,
+            font_size="22sp", bold=True,
         )
-
-        with add_btn.canvas.before:
-            Color(*ACCENT_COLOR)
-            add_btn.bg = RoundedRectangle(
-            pos=add_btn.pos,
-            size=add_btn.size,
-            radius=[20, 20, 20, 20]
-        )
-
-        def update_add_btn(instance, value):
-            add_btn.bg.pos = add_btn.pos
-            add_btn.bg.size = add_btn.size
-
-        add_btn.bind(pos=update_add_btn, size=update_add_btn) 
-
         add_btn.bind(on_release=lambda *_: self.add_task())
-        row.add_widget(self.input)
-        row.add_widget(add_btn)
-        self.add_widget(row)
+        row1.add_widget(self.input)
+        row1.add_widget(add_btn)
+
+        row2 = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(40),
+                          spacing=dp(8))
+        self.deadline_btn = Button(
+            text="Pilih deadline (wajib)",
+            background_normal="",
+            background_color=CARD_COLOR,
+            color=MUTED_COLOR,
+            font_size="13sp",
+            halign="left",
+        )
+        self.deadline_btn.bind(size=lambda *_: setattr(
+            self.deadline_btn, "text_size", (self.deadline_btn.width - dp(20), None)
+        ))
+        self.deadline_btn.bind(on_release=lambda *_: self.open_calendar())
+        row2.add_widget(self.deadline_btn)
+        composer.add_widget(row1)
+        composer.add_widget(row2)
+        self.add_widget(composer)
+
+    def open_calendar(self):
+        popup = CalendarPopup(on_select=self.set_deadline, initial_date=self.selected_deadline)
+        popup.open()
+
+    def set_deadline(self, d):
+        self.selected_deadline = d
+        self.deadline_btn.text = "\U0001F4C5 " + d.strftime("%d %b %Y")
+        self.deadline_btn.color = TEXT_COLOR
+
+    def reset_deadline_button(self):
+        self.selected_deadline = None
+        self.deadline_btn.text = "Pilih deadline (wajib)"
+        self.deadline_btn.color = MUTED_COLOR
 
 
     def load_tasks(self):
@@ -255,16 +463,35 @@ class TodoRoot(BoxLayout):
     def add_task(self):
         text = self.input.text.strip()
         if not text:
+            self._show_error("Nama tugas tidak boleh kosong.")
             return
+
+        if self.selected_deadline is None:
+            self._show_error("Deadline wajib dipilih. Ketuk tombol kalender di bawah.")
+            return
+
         self.tasks.append({
             "id": str(uuid.uuid4()),
             "text": text,
             "done": False,
             "created_at": datetime.now().strftime("%d %b %Y"),
+            "deadline": self.selected_deadline.strftime(DEADLINE_FORMAT),
+            "notified": False,
         })
         self.input.text = ""
+        self.reset_deadline_button()
         self.save_tasks()
         self.render_list()
+
+    def _show_error(self, message):
+        popup = Popup(
+            title="Oops",
+            content=Label(text=message, color=TEXT_COLOR),
+            size_hint=(0.8, None),
+            height=dp(160),
+            separator_color=ACCENT_COLOR,
+        )
+        popup.open()
 
     def toggle_task(self, task_id, value):
         for t in self.tasks:
@@ -309,10 +536,41 @@ class TodoRoot(BoxLayout):
             return
 
 
-        sorted_tasks = sorted(filtered, key=lambda t: (t["done"],), reverse=False)
+        def sort_key(t):
+            d = parse_deadline(t.get("deadline"))
+            has_no_deadline = d is None
+            return (t["done"], has_no_deadline, d or date.max)
+
+        sorted_tasks = sorted(filtered, key=sort_key)
         for task in sorted_tasks:
             item = TaskItem(task, self.toggle_task, self.delete_task)
             self.list_layout.add_widget(item)
+
+
+    def check_deadline_notifications(self, *args):
+        if plyer_notification is None:
+            return
+        tomorrow = date.today() + timedelta(days=1)
+        changed = False
+        for t in self.tasks:
+            if t["done"] or t.get("notified"):
+                continue
+            d = parse_deadline(t.get("deadline"))
+            if d == tomorrow:
+                try:
+                    plyer_notification.notify(
+                        title="Deadline besok!",
+                        message='Tugas "{}" harus selesai besok ({}).'.format(
+                            t["text"], d.strftime("%d %b %Y")
+                        ),
+                        timeout=10,
+                    )
+                except Exception:
+                    pass
+                t["notified"] = True
+                changed = True
+        if changed:
+            self.save_tasks()
 
 
 class TodoApp(App):
